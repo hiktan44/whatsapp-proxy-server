@@ -3,6 +3,7 @@
 ## 🚀 Coolify'a Deployment
 
 ### 1. GitHub Repository Oluşturun
+
 ```bash
 cd proxy-server
 git init
@@ -40,6 +41,7 @@ Genelde Supabase stack içinde Postgres servis adı **`postgres`** (bazı kurulu
 ### 4. Database Internal Hostname Bulma
 
 Coolify terminalinde:
+
 ```bash
 getent hosts postgres
 getent hosts db
@@ -50,6 +52,7 @@ Hangisi IP döndürürse, `POSTGRES_HOST` o olmalı.
 ### 5. Deploy Edin
 
 Coolify otomatik olarak:
+
 - Docker image build edecek
 - Container başlatacak
 - Health check yapacak
@@ -57,7 +60,8 @@ Coolify otomatik olarak:
 ### 6. Public URL Alın
 
 Deploy sonrası Coolify size bir public URL verecek:
-```
+
+```text
 https://proxy-xxxxx.your-domain.com
 ```
 
@@ -79,11 +83,13 @@ POSTGRES_PORT=5432
 ## ✅ Test
 
 Deploy sonrası:
+
 ```bash
 curl https://your-proxy-url.com/health
 ```
 
 Cevap:
+
 ```json
 {
   "status": "ok",
@@ -95,6 +101,7 @@ Cevap:
 ## 🔗 Frontend Bağlantısı
 
 `web-app/supabase-config.js`:
+
 ```javascript
 const SUPABASE_CONFIG = {
   url: 'http://supabasekong-jkc8sgc8cgsw4wk8k4g0okcg.65.108.77.26.sslip.io:8000',
@@ -106,15 +113,17 @@ const SUPABASE_CONFIG = {
 ## 🐛 Troubleshooting
 
 ### Database bağlantı hatası
+
 - Internal hostname'i kontrol edin
 - Database ve Proxy aynı network'te mi?
 - Environment variables doğru mu?
 
 ### CORS hatası
+
 - `index.js` içinde CORS ayarları doğru mu?
 - Frontend URL'i whitelist'te mi?
 
 ### Port hatası
+
 - Coolify'da port 3001 expose edilmiş mi?
 - Health check çalışıyor mu?
-
