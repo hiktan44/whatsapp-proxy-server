@@ -26,25 +26,26 @@ Coolify'da **Environment Variables** bölümünde:
 
 ```env
 PORT=3001
-POSTGRES_HOST=<DATABASE_INTERNAL_HOSTNAME>
+POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 POSTGRES_DB=postgres
-POSTGRES_USER=supabase_admin
-POSTGRES_PASSWORD=<POSTGRES_PASSWORD>
+POSTGRES_USER=proxy_user
+POSTGRES_PASSWORD=CHANGE_ME
 NODE_ENV=production
 ```
 
-**ÖNEMLİ**: `POSTGRES_HOST` için Coolify'daki database'in **internal hostname**'ini kullanın.
-Örnek: `tso4g4cwwwgwcs4kscs48s40` (Database container ID)
+**ÖNEMLİ**: `POSTGRES_HOST` için **container id/hostname** kullanmayın. Aynı docker network içindeki servis adı olmalı.
+Genelde Supabase stack içinde Postgres servis adı **`postgres`** (bazı kurulumlarda `db`) olur.
 
 ### 4. Database Internal Hostname Bulma
 
 Coolify terminalinde:
 ```bash
-hostname
+getent hosts postgres
+getent hosts db
 ```
 
-Veya Coolify arayüzünde **Database > Configuration > Network** bölümünden.
+Hangisi IP döndürürse, `POSTGRES_HOST` o olmalı.
 
 ### 5. Deploy Edin
 

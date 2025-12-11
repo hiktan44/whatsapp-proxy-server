@@ -6,13 +6,13 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - PORT=3001
-      - POSTGRES_HOST=tso4g4cwwwgwcs4kscs48s40
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=postgres
-      - POSTGRES_USER=supabase_admin
-      - POSTGRES_PASSWORD=b9P15yK8JKXgAeXdGpPU93SKgsXFJjQn
-      - NODE_ENV=production
+      - PORT=${PORT:-3001}
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+      - POSTGRES_USER=${POSTGRES_USER:-proxy_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - NODE_ENV=${NODE_ENV:-production}
     restart: unless-stopped
     networks:
       - coolify
