@@ -3,14 +3,17 @@
 ## 📦 Yöntem 1: GitHub ile Deployment (Önerilen)
 
 ### 1. GitHub Repository Oluşturun
-1. https://github.com/new adresine gidin
+
+1. `https://github.com/new` adresine gidin
 2. Repository adı: `whatsapp-proxy-server`
 3. Public veya Private seçin
 4. **README, .gitignore eklemeyin** (zaten var)
 5. "Create repository" tıklayın
 
 ### 2. Kodu GitHub'a Push Edin
+
 Terminal'de (bu klasörde):
+
 ```bash
 git remote add origin https://github.com/KULLANICI_ADINIZ/whatsapp-proxy-server.git
 git branch -M main
@@ -20,19 +23,23 @@ git push -u origin main
 ### 3. Coolify'da Yeni Application Oluşturun
 
 #### 3.1. New Resource
+
 - Coolify Dashboard > **+ New Resource**
 - **Application** seçin
 
 #### 3.2. Source Seçimi
+
 - **Public Repository** veya **Private Repository** (GitHub hesabınızı bağlayın)
 - Repository URL'inizi girin: `https://github.com/KULLANICI_ADINIZ/whatsapp-proxy-server`
 - Branch: `main`
 
 #### 3.3. Build Pack
+
 - **Dockerfile** seçin
 - Dockerfile path: `Dockerfile` (default)
 
 #### 3.4. General Settings
+
 - **Name**: `whatsapp-proxy-server`
 - **Port**: `3001`
 - **Base Directory**: `/` (root)
@@ -43,74 +50,18 @@ git push -u origin main
 
 ```env
 PORT=3001
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=postgres
-POSTGRES_USER=proxy_user
-POSTGRES_PASSWORD=CHANGE_ME
+SUPABASE_URL=https://YOUR-SUPABASE-KONG-DOMAIN:8000
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+CORS_ORIGINS=*
 NODE_ENV=production
 ```
 
-**ÖNEMLİ**: `POSTGRES_HOST` için **container id/hostname** kullanmayın. Aynı docker network içindeki servis adı olmalı.
-Genelde Supabase stack içinde Postgres servis adı **`postgres`** (bazı kurulumlarda `db`) olur.
+**ÖNEMLİ**:
 
-#### Database Internal Hostname Bulma:
-Proxy container'ında test:
-```bash
-getent hosts postgres
-getent hosts db
-```
-Hangisi IP döndürürse, `POSTGRES_HOST` o olmalı.
+- `SUPABASE_SERVICE_ROLE_KEY` **sadece proxy server’da** olmalı (frontend’e koymayın)
+- `SUPABASE_URL` olarak **Kong URL**’inizi kullanın (genelde `https://...:8000`)
 
----
-
-## 🔐 DB'de proxy_user oluşturma (Çok önemli)
-
-Supabase'in bazı rollerı (örn: `supabase_admin`) **reserved** olduğu için şifre/yetki yönetimi sınırlı olabilir.
-Bu yüzden proxy için ayrı bir kullanıcı öneriyoruz.
-
-Coolify > **Supabase Db (Postgres)** > **Terminal**:
-
-```bash
-psql -U postgres -d postgres <<'SQL'
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'proxy_user') THEN
-    CREATE ROLE proxy_user WITH LOGIN PASSWORD 'CHANGE_ME';
-  ELSE
-    ALTER ROLE proxy_user WITH PASSWORD 'CHANGE_ME';
-  END IF;
-END$$;
-
-GRANT USAGE ON SCHEMA public TO proxy_user;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO proxy_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO proxy_user;
-
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO proxy_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-GRANT USAGE, SELECT ON SEQUENCES TO proxy_user;
-SQL
-```
-
-Sonra proxy env'de:
-```env
-POSTGRES_USER=proxy_user
-POSTGRES_PASSWORD=CHANGE_ME
-```
-
-### 5. Network Ayarları
-
-#### 5.1. Aynı Network'e Bağlayın
-- **Networks** bölümünde
-- Database ile aynı network'ü seçin (genellikle `coolify` network'ü)
-
-#### 5.2. Public URL
-- **Domains** bölümünde
-- Coolify otomatik bir domain verecek
-- Veya kendi domain'inizi ekleyebilirsiniz
-
-### 6. Deploy Edin
+### 5. Deploy Edin
 
 - **Deploy** butonuna tıklayın
 - Coolify otomatik olarak:
@@ -119,27 +70,30 @@ POSTGRES_PASSWORD=CHANGE_ME
   - Health check yapacak
   - Public URL verecek
 
-### 7. Deployment Loglarını İzleyin
+### 6. Deployment Loglarını İzleyin
 
 Deploy sırasında:
+
 - **Logs** sekmesinde build sürecini izleyin
 - Hata varsa burada görünecek
 
 Başarılı deployment sonrası göreceğiniz mesajlar:
-```
+
+```text
 🚀 WATI Proxy Server running on port 3001
 📡 Health check: http://localhost:3001/health
-🔗 PostgreSQL: tso4g4cwwwgwcs4kscs48s40:5432/postgres
+🔗 Supabase URL: https://...:8000 (service role key: set)
 ✅ Database connected - X contacts
 ```
 
-### 8. Public URL'i Alın
+### 7. Public URL'i Alın
 
 Deploy tamamlandıktan sonra:
+
 - **Domains** bölümünde public URL'inizi göreceksiniz
 - Örnek: `https://whatsapp-proxy-xxxxx.your-coolify-domain.com`
 
-### 9. Frontend'i Güncelleyin
+### 8. Frontend'i Güncelleyin
 
 `web-app/supabase-config.js` dosyasını güncelleyin:
 
@@ -151,13 +105,16 @@ const SUPABASE_CONFIG = {
 };
 ```
 
-### 10. Test Edin
+### 9. Test Edin
 
 ```bash
 # Health check
 curl https://whatsapp-proxy-xxxxx.your-coolify-domain.com/health
 
 # Beklenen cevap:
+```
+
+```json
 {
   "status": "ok",
   "timestamp": "2024-12-11T12:00:00.000Z",
@@ -193,11 +150,9 @@ cd /root/proxy-server
 # Environment variables'ı ayarlayın
 cat > .env << 'EOF'
 PORT=3001
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=postgres
-POSTGRES_USER=proxy_user
-POSTGRES_PASSWORD=CHANGE_ME
+SUPABASE_URL=https://YOUR-SUPABASE-KONG-DOMAIN:8000
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+CORS_ORIGINS=*
 NODE_ENV=production
 EOF
 
@@ -208,6 +163,7 @@ docker-compose up -d
 ### 3. Nginx Reverse Proxy Ekleyin (Opsiyonel)
 
 Coolify'da **Proxy** bölümünden:
+
 - Yeni bir proxy rule ekleyin
 - Port: 3001
 - Domain: istediğiniz subdomain
@@ -217,40 +173,48 @@ Coolify'da **Proxy** bölümünden:
 ## 🐛 Troubleshooting
 
 ### Database bağlantı hatası
-```
+
+```text
 ❌ Database connection failed: password authentication failed
 ```
 
 **Çözüm:**
-1. `POSTGRES_HOST` değerini kontrol edin (internal hostname olmalı)
-2. Database ile aynı network'te olduğundan emin olun
-3. Environment variables'ı tekrar kontrol edin
+
+1. `SUPABASE_URL` doğru mu? (Kong URL ve port 8000)
+2. `SUPABASE_SERVICE_ROLE_KEY` doğru mu?
+3. Coolify’da env değişikliklerinden sonra mutlaka **Redeploy** yapın
 
 ### Port hatası
-```
+
+```text
 Error: listen EADDRINUSE: address already in use :::3001
 ```
 
 **Çözüm:**
+
 - Başka bir port kullanın (örn: 3002)
 - Veya çakışan container'ı durdurun
 
 ### Build hatası
-```
+
+```text
 ERROR: failed to solve: failed to compute cache key
 ```
 
 **Çözüm:**
+
 - Dockerfile'ı kontrol edin
 - `.dockerignore` dosyasını kontrol edin
 - Coolify'da "Clear Build Cache" yapın
 
 ### CORS hatası
-```
+
+```text
 Access to fetch at 'https://proxy-url.com' has been blocked by CORS
 ```
 
 **Çözüm:**
+
 - `index.js` içinde CORS ayarlarını kontrol edin
 - Frontend URL'ini whitelist'e ekleyin
 
@@ -262,8 +226,6 @@ Access to fetch at 'https://proxy-url.com' has been blocked by CORS
 - [ ] Kod GitHub'a push edildi
 - [ ] Coolify'da application oluşturuldu
 - [ ] Environment variables eklendi
-- [ ] Database internal hostname doğru ayarlandı
-- [ ] Aynı network'e bağlandı
 - [ ] Deploy tamamlandı
 - [ ] Health check başarılı
 - [ ] Public URL alındı
@@ -275,8 +237,8 @@ Access to fetch at 'https://proxy-url.com' has been blocked by CORS
 ## 📞 Yardım
 
 Sorun yaşarsanız:
+
 1. Coolify logs'ları kontrol edin
 2. Database bağlantısını test edin
 3. Environment variables'ı doğrulayın
 4. Network ayarlarını kontrol edin
-

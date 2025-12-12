@@ -19,10 +19,10 @@ npm install
 cp env.example .env
 ```
 
-```.env
-SUPABASE_URL=https://supabase.yourdomain.com
-SUPABASE_SERVICE_KEY=your_service_role_key
-PORT=3000
+```env
+SUPABASE_URL=https://YOUR-SUPABASE-KONG-DOMAIN:8000
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+PORT=3001
 ```
 
 ### 3. Sunucuyu Başlatın
@@ -50,7 +50,7 @@ GET /health
   "status": "ok",
   "timestamp": "2024-01-01T12:00:00.000Z",
   "uptime": 123.45,
-  "supabase": true
+  "database": "connected"
 }
 ```
 
@@ -108,8 +108,8 @@ docker run -p 3000:3000 --env-file .env wati-proxy
 5. **Start Command**: `npm start`
 6. **Environment Variables**:
    - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_KEY`
-   - `PORT=3000`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `PORT=3001`
 7. **"Deploy"**
 
 ## 🔧 Troubleshooting

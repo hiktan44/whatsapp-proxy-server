@@ -1,35 +1,51 @@
 import express from 'express';
 import cors from 'cors';
-import pg from 'pg';
 import dotenv from 'dotenv';
+import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
+
+// Supabase Config (server-side)
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY || // backward-compat
+  process.env.SUPABASE_SERVICE_KEY; // legacy name
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn(
+    '⚠️ Supabase env eksik. Gerekli: SUPABASE_URL ve SUPABASE_SERVICE_ROLE_KEY (server-side).'
+  );
+}
+
+const supabase = createClient(SUPABASE_URL || '', SUPABASE_SERVICE_ROLE_KEY || '', {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+});
 
 // CORS - Tüm origin'lere izin ver (production'da spesifik domain kullanın)
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
+const corsOrigins = (process.env.CORS_ORIGINS || '*')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: corsOrigins.length === 1 && corsOrigins[0] === '*' ? '*' : corsOrigins,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  })
+);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// PostgreSQL Pool
-const pool = new pg.Pool({
-  host: process.env.POSTGRES_HOST || 'localhost',
-  port: parseInt(process.env.POSTGRES_PORT) || 5432,
-  database: process.env.POSTGRES_DB || 'postgres',
-  user: process.env.POSTGRES_USER || 'postgres',
-  password: process.env.POSTGRES_PASSWORD || '',
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -40,14 +56,19 @@ app.use((req, res, next) => {
 // Health check
 app.get('/health', async (req, res) => {
   try {
-    // Test PostgreSQL connection
-    const result = await pool.query('SELECT NOW()');
-    res.json({ 
-      status: 'ok', 
+    // Test Supabase connection (head query)
+    const { error, count } = await supabase
+      .from('contacts')
+      .select('id', { count: 'exact', head: true });
+
+    if (error) throw error;
+
+    res.json({
+      status: 'ok',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       database: 'connected',
-      db_time: result.rows[0].now
+      contacts_count: count ?? null,
     });
   } catch (error) {
     res.status(500).json({
@@ -66,10 +87,27 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       health: '/health',
-      watiProxy: '/api/wati-proxy (POST)'
+      watiProxy: '/api/wati-proxy (POST)',
+      contacts: '/api/contacts',
+      messages: '/api/messages',
+      campaigns: '/api/campaigns',
+      templates: '/api/templates',
+      settings: '/api/settings/:key',
+      activities: '/api/activity-logs',
     }
   });
 });
+
+function toHttpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function safeJson(value) {
+  // Supabase jsonb alanları zaten JS objesi olabilir
+  return value === undefined ? null : value;
+}
 
 // WATI API Proxy
 app.post('/api/wati-proxy', async (req, res) => {
@@ -82,13 +120,16 @@ app.post('/api/wati-proxy', async (req, res) => {
 
     console.log(`📡 WATI Proxy: ${action}`);
 
-    // WATI API ayarlarını PostgreSQL'den al
-    const settingsResult = await pool.query(
-      `SELECT key, value FROM settings WHERE key IN ('wati_api_key', 'wati_api_url')`
-    );
+    // WATI API ayarlarını Supabase'den al
+    const { data: rows, error: settingsError } = await supabase
+      .from('settings')
+      .select('key,value')
+      .in('key', ['wati_api_key', 'wati_api_url']);
+
+    if (settingsError) throw settingsError;
 
     const settings = {};
-    settingsResult.rows.forEach(row => {
+    (rows || []).forEach(row => {
       settings[row.key] = row.value;
     });
 
@@ -167,19 +208,16 @@ app.post('/api/wati-proxy', async (req, res) => {
 
     // Aktivite logla
     try {
-      await pool.query(
-        `INSERT INTO activity_logs (action, details) VALUES ($1, $2)`,
-        [
-          `wati_${action}`,
-          JSON.stringify({
-            endpoint,
-            method,
-            status: watiResponse.status,
-            success: watiResponse.ok,
-            timestamp: new Date().toISOString()
-          })
-        ]
-      );
+      await supabase.from('activity_logs').insert({
+        action: `wati_${action}`,
+        details: safeJson({
+          endpoint,
+          method,
+          status: watiResponse.status,
+          success: watiResponse.ok,
+          timestamp: new Date().toISOString(),
+        }),
+      });
     } catch (logError) {
       console.error('⚠️ Aktivite loglama hatası:', logError);
       // Loglama hatası ana işlemi etkilemesin
@@ -203,13 +241,17 @@ app.get('/api/contacts', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 1000;
     const offset = parseInt(req.query.offset) || 0;
+    const from = offset;
+    const to = Math.max(offset + limit - 1, offset);
 
-    const result = await pool.query(
-      'SELECT * FROM contacts ORDER BY created_at DESC LIMIT $1 OFFSET $2',
-      [limit, offset]
-    );
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, to);
 
-    res.json(result.rows);
+    if (error) throw error;
+    res.json(data || []);
   } catch (error) {
     console.error('❌ Kişiler yüklenemedi:', error);
     res.status(500).json({ error: error.message });
@@ -220,19 +262,26 @@ app.get('/api/contacts', async (req, res) => {
 app.post('/api/contacts', async (req, res) => {
   try {
     const { name, phone, email, company, tags } = req.body;
+    if (!name || !phone) throw toHttpError(400, 'name ve phone zorunludur');
 
-    const result = await pool.query(
-      `INSERT INTO contacts (name, phone, email, company, tags) 
-       VALUES ($1, $2, $3, $4, $5) 
-       RETURNING *`,
-      [name, phone, email || null, company || null, tags || []]
-    );
+    const { data, error } = await supabase
+      .from('contacts')
+      .insert({
+        name,
+        phone,
+        email: email || null,
+        company: company || null,
+        tags: tags || [],
+      })
+      .select('*')
+      .single();
 
+    if (error) throw error;
     console.log('✅ Kişi eklendi:', phone);
-    res.json(result.rows[0]);
+    res.json(data);
   } catch (error) {
     console.error('❌ Kişi eklenemedi:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -240,40 +289,71 @@ app.post('/api/contacts', async (req, res) => {
 app.post('/api/contacts/bulk', async (req, res) => {
   try {
     const { contacts } = req.body;
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
-      const insertedContacts = [];
+    if (!Array.isArray(contacts)) throw toHttpError(400, 'contacts array olmalı');
 
-      for (const contact of contacts) {
-        const result = await client.query(
-          `INSERT INTO contacts (name, phone, email, company, tags) 
-           VALUES ($1, $2, $3, $4, $5) 
-           ON CONFLICT (phone) DO UPDATE 
-           SET name = EXCLUDED.name, 
-               email = EXCLUDED.email, 
-               company = EXCLUDED.company, 
-               tags = EXCLUDED.tags,
-               updated_at = NOW()
-           RETURNING *`,
-          [contact.name, contact.phone, contact.email || null, contact.company || null, contact.tags || []]
-        );
-        insertedContacts.push(result.rows[0]);
-      }
+    const payload = contacts.map(c => ({
+      name: c.name,
+      phone: c.phone,
+      email: c.email || null,
+      company: c.company || null,
+      tags: c.tags || [],
+    }));
 
-      await client.query('COMMIT');
-      console.log(`✅ ${insertedContacts.length} kişi eklendi`);
-      res.json(insertedContacts);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    // phone unique => upsert
+    const { data, error } = await supabase
+      .from('contacts')
+      .upsert(payload, { onConflict: 'phone' })
+      .select('*');
+
+    if (error) throw error;
+    console.log(`✅ ${data?.length || 0} kişi eklendi`);
+    res.json(data || []);
   } catch (error) {
     console.error('❌ Toplu kişi eklenemedi:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// Kişi güncelle
+app.put('/api/contacts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body || {};
+
+    const { data, error } = await supabase
+      .from('contacts')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Kişi güncellenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// Kişi ara
+app.get('/api/contacts/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json([]);
+    const like = `%${q}%`;
+
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('*')
+      .or(`name.ilike.${like},phone.ilike.${like},email.ilike.${like},company.ilike.${like}`)
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error) {
+    console.error('❌ Kişi arama hatası:', error);
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -281,14 +361,13 @@ app.post('/api/contacts/bulk', async (req, res) => {
 app.delete('/api/contacts/:id', async (req, res) => {
   try {
     const { id } = req.params;
-
-    await pool.query('DELETE FROM contacts WHERE id = $1', [id]);
-
+    const { error } = await supabase.from('contacts').delete().eq('id', id);
+    if (error) throw error;
     console.log('✅ Kişi silindi:', id);
     res.json({ success: true });
   } catch (error) {
     console.error('❌ Kişi silinemedi:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -298,18 +377,44 @@ app.delete('/api/contacts/:id', async (req, res) => {
 app.post('/api/messages', async (req, res) => {
   try {
     const { contact_id, phone, message_text, template_name, status } = req.body;
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({
+        contact_id: contact_id || null,
+        phone,
+        message_text,
+        template_name: template_name || null,
+        status: status || 'pending',
+      })
+      .select('*')
+      .single();
 
-    const result = await pool.query(
-      `INSERT INTO messages (contact_id, phone, message_text, template_name, status) 
-       VALUES ($1, $2, $3, $4, $5) 
-       RETURNING *`,
-      [contact_id || null, phone, message_text, template_name || null, status || 'pending']
-    );
-
-    res.json(result.rows[0]);
+    if (error) throw error;
+    res.json(data);
   } catch (error) {
     console.error('❌ Mesaj eklenemedi:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// Mesaj durum güncelle
+app.put('/api/messages/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, errorMessage } = req.body || {};
+
+    const { data, error } = await supabase
+      .from('messages')
+      .update({ status, error_message: errorMessage || null })
+      .eq('id', id)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Mesaj durumu güncellenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -317,20 +422,188 @@ app.post('/api/messages', async (req, res) => {
 app.get('/api/messages', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*, contacts(name, phone)')
+      .order('created_at', { ascending: false })
+      .limit(limit);
 
-    const result = await pool.query(
-      `SELECT m.*, c.name as contact_name, c.phone as contact_phone
-       FROM messages m
-       LEFT JOIN contacts c ON m.contact_id = c.id
-       ORDER BY m.created_at DESC
-       LIMIT $1`,
-      [limit]
-    );
-
-    res.json(result.rows);
+    if (error) throw error;
+    res.json(data || []);
   } catch (error) {
     console.error('❌ Mesajlar yüklenemedi:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// ===== KAMPANYALAR API =====
+app.get('/api/campaigns', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('campaigns')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error) {
+    console.error('❌ Kampanyalar yüklenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+app.post('/api/campaigns', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const { data, error } = await supabase.from('campaigns').insert(payload).select('*').single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Kampanya eklenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+app.put('/api/campaigns/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body || {};
+    const { data, error } = await supabase
+      .from('campaigns')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Kampanya güncellenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// ===== ŞABLONLAR API =====
+app.get('/api/templates', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('templates')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error) {
+    console.error('❌ Şablonlar yüklenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+app.post('/api/templates', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const { data, error } = await supabase.from('templates').insert(payload).select('*').single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Şablon eklenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+app.put('/api/templates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body || {};
+    const { data, error } = await supabase
+      .from('templates')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Şablon güncellenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/templates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('templates').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('❌ Şablon silinemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// ===== AYARLAR API =====
+app.get('/api/settings/:key', async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { data, error } = await supabase
+      .from('settings')
+      .select('key,value')
+      .eq('key', key)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Ayar bulunamadı' });
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Ayar alınamadı:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+app.put('/api/settings/:key', async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { value } = req.body || {};
+    const { data, error } = await supabase
+      .from('settings')
+      .upsert({ key, value: safeJson(value) }, { onConflict: 'key' })
+      .select('key,value')
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Ayar kaydedilemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// ===== AKTİVİTE LOG API =====
+app.post('/api/activity-logs', async (req, res) => {
+  try {
+    const { action, details } = req.body || {};
+    if (!action) throw toHttpError(400, 'action zorunludur');
+    const { data, error } = await supabase
+      .from('activity_logs')
+      .insert({ action, details: safeJson(details || {}) })
+      .select('*')
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Aktivite eklenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+app.get('/api/activity-logs', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const { data, error } = await supabase
+      .from('activity_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error) {
+    console.error('❌ Aktiviteler yüklenemedi:', error);
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -353,12 +626,15 @@ app.use((err, req, res, next) => {
 app.listen(PORT, async () => {
   console.log(`🚀 WATI Proxy Server running on port ${PORT}`);
   console.log(`📡 Health check: http://localhost:${PORT}/health`);
-  console.log(`🔗 PostgreSQL: ${process.env.POSTGRES_HOST}:${process.env.POSTGRES_PORT}/${process.env.POSTGRES_DB}`);
-  
+  console.log(`🔗 Supabase URL: ${SUPABASE_URL || '(missing)'} (service role key: ${SUPABASE_SERVICE_ROLE_KEY ? 'set' : 'missing'})`);
+
   // Test database connection
   try {
-    const result = await pool.query('SELECT COUNT(*) FROM contacts');
-    console.log(`✅ Database connected - ${result.rows[0].count} contacts`);
+    const { count, error } = await supabase
+      .from('contacts')
+      .select('id', { count: 'exact', head: true });
+    if (error) throw error;
+    console.log(`✅ Database connected - ${count ?? 0} contacts`);
   } catch (error) {
     console.error('❌ Database connection failed:', error.message);
   }

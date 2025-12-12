@@ -27,27 +27,21 @@ Coolify'da **Environment Variables** bölümünde:
 
 ```env
 PORT=3001
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=postgres
-POSTGRES_USER=proxy_user
-POSTGRES_PASSWORD=CHANGE_ME
+SUPABASE_URL=https://YOUR-SUPABASE-KONG-DOMAIN:8000
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+CORS_ORIGINS=*
 NODE_ENV=production
 ```
 
-**ÖNEMLİ**: `POSTGRES_HOST` için **container id/hostname** kullanmayın. Aynı docker network içindeki servis adı olmalı.
-Genelde Supabase stack içinde Postgres servis adı **`postgres`** (bazı kurulumlarda `db`) olur.
+**ÖNEMLİ**:
 
-### 4. Database Internal Hostname Bulma
+- `SUPABASE_SERVICE_ROLE_KEY` **sadece proxy server’da** olmalı (frontend’e koymayın)
+- `SUPABASE_URL` olarak **Kong URL**’inizi kullanın (genelde `https://...:8000`)
 
-Coolify terminalinde:
+### 4. Supabase URL ve Service Role Key Nereden Alınır?
 
-```bash
-getent hosts postgres
-getent hosts db
-```
-
-Hangisi IP döndürürse, `POSTGRES_HOST` o olmalı.
+- **SUPABASE_URL**: Coolify’da Supabase Kong servisinin URL’i (genelde `https://...:8000`)
+- **SUPABASE_SERVICE_ROLE_KEY**: Supabase stack environment variables içinde `SERVICE_ROLE_KEY` / `SUPABASE_SERVICE_ROLE_KEY`
 
 ### 5. Deploy Edin
 
@@ -66,19 +60,6 @@ https://proxy-xxxxx.your-domain.com
 ```
 
 Bu URL'i `web-app/supabase-config.js` dosyasında `proxyUrl` olarak kullanın.
-
-## 🔧 Alternatif: Local Proxy + SSH Tunnel
-
-Eğer Coolify'a deploy etmek istemiyorsanız, SSH tunnel kullanabilirsiniz:
-
-```bash
-# Local makinenizde
-ssh -L 5432:localhost:5432 root@65.108.77.26
-
-# Sonra .env'de
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-```
 
 ## ✅ Test
 
@@ -114,9 +95,9 @@ const SUPABASE_CONFIG = {
 
 ### Database bağlantı hatası
 
-- Internal hostname'i kontrol edin
-- Database ve Proxy aynı network'te mi?
-- Environment variables doğru mu?
+- `SUPABASE_URL` doğru mu? (Kong URL + port `8000`)
+- `SUPABASE_SERVICE_ROLE_KEY` doğru mu?
+- Coolify’da env güncellemesinden sonra **Redeploy** yapıldı mı?
 
 ### CORS hatası
 
